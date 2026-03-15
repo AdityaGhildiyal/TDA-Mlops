@@ -2,7 +2,7 @@
 
 **File:** `notebooks/phase1_appendix_A.ipynb`  
 **Thesis role:** Appendix A — complete worked derivation of persistent homology from first principles  
-**Status:** Days 1–3 complete
+**Status:** Days 1–5 complete (21 cells)
 
 ---
 
@@ -11,13 +11,14 @@
 This notebook proves, step by step, that topological features of data can be computed
 algorithmically. It starts from the definition of a simplicial complex, builds boundary
 matrices by hand, computes Betti numbers, constructs a full VR filtration, tracks
-persistence pairs manually, and verifies every result against Ripser — the same library
-used in the production pipeline.
+persistence pairs manually, applies Takens embedding to time series, and verifies
+every result against Ripser — the same library used in the production pipeline.
 
-By the end of Appendix A, any examiner should be able to follow the full chain:
+By the end of Appendix A, any examiner can follow the full chain:
 
 ```
-Point cloud → Simplicial complex → Boundary matrices → Betti numbers → Persistence diagram
+Point cloud → Simplicial complex → Boundary matrices → Betti numbers
+→ Persistence diagram → Takens embedding → Anomaly detection → Stability theorem
 ```
 
 ---
@@ -91,8 +92,7 @@ CA [  +1 ]
 **The fundamental lemma:** `∂₁ ∘ ∂₂ = 0`
 
 This says "the boundary of a boundary is always empty." It is the cornerstone of
-homology theory. The output `[[0], [0], [0]]` confirms it holds for our triangle.
-Without this identity, homology groups could not be defined.
+homology theory. Without this identity, homology groups could not be defined.
 
 **Expected output:**
 
@@ -133,12 +133,6 @@ the critical difference between a filled and an empty triangle.
 | β₁     | Independent loops    | 0               | 1              |
 | β₂     | Enclosed voids       | 0               | 0              |
 
-**Key insight — the most common examiner question:**  
-A filled triangle has β₁ = 0 because the loop AB → BC → CA is the boundary of the
-filled face ABC. In homology terms, the cycle is also a boundary — it is "trivial."  
-An empty triangle has β₁ = 1 because the loop exists but has no filler to make it
-trivial. This is a genuine topological hole.
-
 **Expected output:**
 
 ```
@@ -160,23 +154,11 @@ result = ripser.ripser(X, maxdim=1)
 plot_diagrams(result['dgms'], show=True)
 ```
 
-**What it does:** Generates 80 points on a noisy circle and runs Ripser to compute
-persistent homology up to dimension 1. Plots the persistence diagram.
-
-**Why a noisy circle:** A perfect circle is topologically a loop — it should have
-β₁ = 1. Adding Gaussian noise (σ = 0.05) tests the stability theorem: small
-perturbations should not destroy the topological signal.
-
-**Reading the persistence diagram:**
-
-- Each point (b, d) represents a topological feature born at radius b and dying at radius d
-- Points near the diagonal: short-lived features = noise
-- Points far from the diagonal: long-lived features = genuine topology
-- One point in H₁ far from the diagonal = the loop of the circle
+**What it does:** Generates 80 points on a noisy circle and runs Ripser. Plots the
+persistence diagram. One point in H₁ far from the diagonal confirms β₁ = 1.
 
 **Connection to anomaly detection:** In the production pipeline, anomalous data
-produces persistence diagram points far from the diagonal. This cell gives the
-visual intuition for why.
+produces persistence diagram points far from the diagonal.
 
 ---
 
@@ -185,10 +167,10 @@ visual intuition for why.
 ```python
 class BoundaryMatrix:
     def __init__(self, matrix):
-        self.M = np.array(matrix, dtype=int)   # store raw
+        self.M = np.array(matrix, dtype=int)   # store raw, NO % 2 here
 
     def reduce(self):
-        M = (self.M % 2)   # convert to Z/2Z for reduction
+        M = (self.M % 2)   # mod 2 ONLY during reduction
         ...
 
     def betti(self, higher_boundary=None):
@@ -196,21 +178,15 @@ class BoundaryMatrix:
 ```
 
 **What it does:** Encapsulates boundary matrix operations into a reusable class.
-This is the same code that lives in `tda_detect/utils.py` for use by the rest
-of the pipeline.
+This is the same code that lives in `tda_detect/utils.py`.
 
-**Critical design decision — Z/2Z arithmetic:**  
-The `reduce()` method works over Z/2Z (integers mod 2). This means:
+**Critical design decision — Z/2Z arithmetic:**
+The `reduce()` method works over Z/2Z (integers mod 2). The `__init__` stores
+the raw matrix (with -1 entries intact) so that `matrix_rank` in `betti()` works
+correctly. The `% 2` conversion happens only inside `reduce()`.
 
-- All entries become 0 or 1
-- Addition becomes XOR
-- Signs disappear
-
-Why? Working over Z/2Z eliminates the sign bookkeeping from boundary operators,
-making the algorithm simpler and exactly matching how Ripser computes internally.
-The `__init__` stores the raw matrix (with -1 entries intact) so that `matrix_rank`
-in `betti()` works correctly over the integers. The `% 2` conversion happens only
-inside `reduce()`.
+**⚠️ Known bug to avoid:** Never apply `% 2` in `__init__`. In Python/NumPy,
+`(-1) % 2 == 1`, which would corrupt -1 entries to +1 and produce wrong ranks.
 
 **The column reduction algorithm (Edelsbrunner & Harer Ch. 4):**
 
@@ -218,46 +194,15 @@ inside `reduce()`.
 For each column j (left to right):
     Find its lowest 1 (= largest row index with a 1)
     If another column already owns that pivot:
-        XOR column j with that column (eliminates the shared pivot)
+        XOR column j with that column
         Repeat
     Else:
         Claim this pivot for column j
 ```
 
-This is the standard persistence algorithm. After reduction, paired columns
-(those that got reduced to zero) correspond to topological features that die,
-and unpaired non-zero columns correspond to features that are born and never die
-(essential classes).
-
 ---
 
 ### Cell 6 — Verify BoundaryMatrix on the triangle
-
-```python
-d1 = BoundaryMatrix([[-1, 0, +1], [+1, -1, 0], [0, +1, -1]])
-d2_filled = BoundaryMatrix([[+1], [+1], [+1]])
-d2_empty  = BoundaryMatrix(np.zeros((3, 0), dtype=int))
-```
-
-**What it does:** Rebuilds the triangle example using the new class and verifies
-it produces identical results to Cell 3. Also reduces ∂₁ and prints the pivot
-structure.
-
-**Reading the reduced matrix output:**
-
-```
-Reduced ∂1:
- [[1 0 0]
-  [1 1 0]
-  [0 1 0]]
-Pivots: {1: 0, 2: 1}
-```
-
-Column 0 has pivot at row 1 (edge AB kills vertex B's component).  
-Column 1 has pivot at row 2 (edge BC kills vertex C's component).  
-Column 2 reduces to zero — it is in the kernel (the loop CA is a cycle).  
-This zero column in ∂₁ with no corresponding pivot in ∂₂ is the β₁ = 1 loop
-of the empty triangle.
 
 **Expected output:**
 
@@ -270,33 +215,14 @@ Empty triangle:  b0=1, b1=1
 
 ### Cell 7 — Persistence pairs from reduced matrices
 
-```python
-def persistence_pairs(d_k_reduced, d_k1_reduced):
-    pivots = d_k1_reduced.pivot_col
-    ...
-    # Essential = zero columns in reduced d_k not killed by d_k1
-```
-
-**What it does:** Extracts (birth, death) pairs from the reduced boundary matrices.
-This is the direct output of the persistence algorithm before it gets packaged
-into a diagram.
-
 **Pairing rule:**
 
-- A non-zero column j in reduced ∂ₖ₊₁ with pivot at row i means: simplex i is born,
-  simplex j kills it → persistence pair (birth=i, death=j)
-- A zero column in reduced ∂ₖ that is not killed by anything → essential class (death = ∞)
+- A non-zero column j in reduced ∂ₖ₊₁ with pivot at row i → persistence pair (birth=i, death=j)
+- A zero column in reduced ∂ₖ that is not killed → essential class (death = ∞)
 
-**For the empty triangle:**
-
-- ∂₂ is empty (no 2-simplices), so no pairs
-- Column 2 of reduced ∂₁ is zero and unkilled → essential H₁ class
-- This is the loop, which lives forever
-
-**Expected output:**
+**Expected output (empty triangle):**
 
 ```
-=== Empty triangle persistence ===
 Paired (birth simplex -> death simplex): {}
 Essential (never-dying) classes: columns [2]
 ```
@@ -305,29 +231,10 @@ Essential (never-dying) classes: columns [2]
 
 ### Cell 8 — Two disconnected loops
 
-```python
-d1_two = BoundaryMatrix([
-    [-1, 0, +1, 0, 0, 0],  # A
-    [+1,-1,  0, 0, 0, 0],  # B
-    [ 0,+1, -1, 0, 0, 0],  # C
-    [ 0, 0,  0,-1, 0,+1],  # D
-    [ 0, 0,  0,+1,-1, 0],  # E
-    [ 0, 0,  0, 0,+1,-1],  # F
-])
-```
-
-**What it does:** Tests the multi-component, multi-loop case — two separate empty
-triangles with no shared vertices.
-
 **Expected topology:**
 
 - β₀ = 2: two disconnected components (triangle ABC and triangle DEF)
 - β₁ = 2: two independent loops (one per triangle)
-
-**Why this matters:** This example tests that the boundary matrix framework handles
-disconnected complexes correctly. The block-diagonal structure of the matrix
-(top-left = triangle ABC, bottom-right = triangle DEF) directly reflects the
-topological disconnection.
 
 **Expected output:**
 
@@ -339,22 +246,8 @@ Two empty triangles: b0=2, b1=2
 
 ### Cell 9 — VR filtration: distance matrix and edge birth times
 
-```python
-points = np.array([[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]])
-D = cdist(points, points)
-edge_births = {(i,j): D[i,j] for i,j in edges}
-```
-
 **What it does:** Places 4 points as a unit square, computes all pairwise distances,
-and labels every possible edge with the ε value at which it appears in the
-Vietoris-Rips filtration.
-
-**Key concept — the VR filtration:** As ε increases from 0 to ∞, the VR complex
-grows by adding edges (and eventually triangles) between points that fall within
-distance ε. This cell makes that process completely explicit:
-
-- Side edges (length 1.000) appear first
-- Diagonal edges (length 1.414) appear later
+and labels every edge with the ε value at which it appears.
 
 **Expected output:**
 
@@ -372,9 +265,6 @@ Edge birth times:
 
 ### Cell 10 — VR filtration: three snapshots
 
-**What it does:** Draws the simplicial complex at ε = 0.60, ε = 1.05, and ε = 1.50,
-showing how the complex grows as ε increases.
-
 **Reading the three panels:**
 
 | ε value | What appears                        | Topology                     |
@@ -383,37 +273,11 @@ showing how the complex grows as ε increases.
 | 1.05    | All 4 side edges                    | β₀ = 1, β₁ = 1 (square loop) |
 | 1.50    | Both diagonals + 2 filled triangles | β₀ = 1, β₁ = 0 (loop filled) |
 
-**The key observation:** At ε = 1.05, a loop appears (β₁ = 1). At ε = 1.414, the
-diagonals fill the loop with two triangles (β₁ drops back to 0). The persistence
-of this loop is its lifetime: 1.414 − 1.000 = 0.414.
+Loop persistence = 1.414 − 1.000 = 0.414.
 
 ---
 
 ### Cell 11 — Hand-computed H0 persistence pairs using Union-Find
-
-```python
-parent = list(range(4))
-
-def find(x): ...
-def union(x, y): ...
-
-for (i, j), birth in sorted_edges:
-    merged = union(i, j)
-    if merged:
-        h0_pairs.append((0.0, birth))
-```
-
-**What it does:** Manually tracks how connected components merge as edges appear,
-using a Union-Find (disjoint-set) data structure. Each merge event produces one
-H0 persistence pair.
-
-**The Union-Find algorithm:**
-
-- Each vertex starts as its own component
-- When an edge appears, if its two endpoints are in different components, merge them
-  → one component dies: H0 pair (birth=0, death=ε)
-- If the endpoints are already connected, the edge creates a loop (H1 event)
-- The last surviving component never dies → essential H0 class (death = ∞)
 
 **Expected output:**
 
@@ -422,70 +286,216 @@ Edge 0-1 at ε=1.000 → merges components → H0 pair: (birth=0.000, death=1.00
 Edge 0-3 at ε=1.000 → merges components → H0 pair: (birth=0.000, death=1.000)
 Edge 1-2 at ε=1.000 → merges components → H0 pair: (birth=0.000, death=1.000)
 Edge 2-3 at ε=1.000 → creates loop (H1 event)
-Edge 0-2 at ε=1.414 → creates loop (H1 event)
-Edge 1-3 at ε=1.414 → creates loop (H1 event)
-
+...
 1 essential H0 class: (birth=0.000, death=∞)
 ```
 
-**Why only 3 H0 pairs for 4 vertices:** With 4 vertices (4 components), exactly 3
-merges are needed to reach 1 component. The 4th component is the essential class.
+**Why only 3 H0 pairs for 4 vertices:** Exactly 3 merges are needed to go from 4
+components to 1. The 4th component is the essential class.
 
 ---
 
 ### Cell 12 — Hand-drawn persistence diagram
 
-**What it does:** Plots the persistence diagram built entirely from the Union-Find
-computation in Cell 11 — no Ripser involved.
-
-**Reading the diagram:**
-
-- Blue dots at (0.000, 1.000): three components that were born at ε=0 and died at ε=1
-- Blue triangle + arrow: the essential H0 class that was born at ε=0 and never dies
-- The diagonal (dashed line): features on the diagonal have zero lifetime = noise
-
-**The key insight printed at the bottom:**
-
-```
-Points far from diagonal = long-lived features = topologically significant
-Points near diagonal     = short-lived features = noise
-```
-
-This is the mathematical foundation for anomaly detection: anomalous data produces
-persistence points far from the diagonal.
+Plots the persistence diagram from Cell 11 with no Ripser involvement. Points far
+from the diagonal are long-lived features; points near the diagonal are noise.
 
 ---
 
 ### Cell 13 — Verify against Ripser
 
-```python
-result = ripser.ripser(points, maxdim=1)
-plot_diagrams(result['dgms'], show=True)
-```
-
-**What it does:** Runs the same 4-point square through Ripser and compares the
-output against the hand-computed results from Cells 11–12.
-
 **Expected Ripser H0 output:**
 
 ```
-birth=0.000, death=1.000   ← matches hand-computed pair
-birth=0.000, death=1.000   ← matches hand-computed pair
-birth=0.000, death=1.000   ← matches hand-computed pair
-birth=0.000, death=∞       ← matches essential class
+birth=0.000, death=1.000  ← matches hand-computed pair (×3)
+birth=0.000, death=∞      ← matches essential class
 ```
 
 **Expected Ripser H1 output:**
 
 ```
-birth=1.000, death=1.414   ← the square loop (born when 4 side edges appear, dies when diagonal fills it)
+birth=1.000, death=1.414  ← the square loop
 ```
 
-**Why this matters:** The Ripser output exactly matches the hand computation. This
-confirms that our manual Union-Find approach is not just an approximation — it is
-the same algorithm Ripser implements at high speed. The H1 pair (1.000, 1.414) was
-not computed by hand (that requires H1 reduction, covered in Cell 7 for the triangle
-case), but Ripser finds it automatically.
+Ripser output exactly matches the hand computation. ✓
+
+---
+
+## Part IV — Takens Embedding: Time Series → Topology
+
+_Cells 14–21 cover the Day 4 + Day 5 content._
+
+Takens' embedding theorem (1981) states that the topology of the attractor of a
+dynamical system can be reconstructed from a single scalar time series:
+
+```
+x(t) = ( s(t), s(t+τ), s(t+2τ), ..., s(t+(d-1)τ) )
+```
+
+A periodic signal (normal heartbeat) traces a closed loop → β₁ = 1.
+An anomalous signal breaks the loop → β₁ changes. This is the basis of
+`tda_detect/drift.py`.
+
+---
+
+### Cell 14 — Takens embedding function
+
+```python
+def takens_embed(signal, dim, tau):
+    N = len(signal)
+    n_points = N - (dim - 1) * tau
+    X = np.zeros((n_points, dim))
+    for i in range(dim):
+        X[:, i] = signal[i * tau : i * tau + n_points]
+    return X
+```
+
+**Output shape:** `(N − (dim−1)·τ, dim)`. Each row is a sliding delay vector.
+
+**Sanity check:** For signal `[1,2,3,4,5,6,7,8]`, dim=3, tau=1:
+
+```
+Row 0 = [1, 2, 3]
+Row 1 = [2, 3, 4]
+...
+```
+
+---
+
+### Cell 15 — Normal signal: clean sine wave → clean loop
+
+**Setup:**
+
+- Signal: sin(t), 4 full cycles, 500 samples
+- τ = 31 (≈ quarter period for best phase-space reconstruction)
+- Embedding dimension: 3
+
+**Expected result:** 3D plot shows a clean closed loop → β₁ = 1.
+
+**Why τ = quarter period:** For a sine wave, quarter-period delay gives coordinates
+(sin, cos, −sin) which trace a circle. This is the theoretically optimal delay.
+
+---
+
+### Cell 16 — Compute H₁ on normal signal
+
+**Expected output:**
+
+- One dominant H₁ point far from diagonal (the loop)
+- Many near-diagonal H₁ points (sampling noise from finite points on the loop)
+
+```
+Normal signal — Ripser H1 diagram:
+  birth=..., death=..., persistence=~1.2  ← the dominant loop feature
+```
+
+The persistence value of this dominant feature is the _topological fingerprint_
+of normal operation. Stored and compared against in drift detection.
+
+---
+
+### Cell 17 — Anomalous signal: inject spikes
+
+**Anomaly type:** Sharp up-down spike pairs (amplitude 3.5×) at t = 100, 200, 310.
+
+**Simulates:**
+
+- Cardiac arrhythmia in ECG
+- Transducer fault in manufacturing sensor
+- Traffic burst in network monitoring
+
+Two-panel plot shows normal (blue) vs anomalous (crimson) signals.
+
+---
+
+### Cell 18 — Phase space comparison: normal vs anomalous
+
+Side-by-side 3D Takens embedding plots.
+
+- **Left (normal):** Clean closed loop — β₁ = 1 visible to the naked eye
+- **Right (anomalous):** Loop broken by spike arms — topology disturbed
+
+This is the most visually striking result in Appendix A and the plot most likely
+to be remembered by examiners.
+
+---
+
+### Cell 19 — Compare persistence diagrams
+
+Side-by-side persistence diagrams confirm the visual observation:
+
+- **Normal:** One dominant H₁ feature (the loop), all others near diagonal
+- **Anomalous:** Dominant H₁ feature reduced or split; new features at unusual positions
+
+```
+Normal — max H1 persistence  : ~1.2
+Anomaly — max H1 persistence : smaller (loop broken)
+```
+
+This quantitative change is what the model in `tda_detect/models.py` learns to score.
+
+---
+
+### Cell 20 — Wasserstein distance
+
+```python
+from persim import wasserstein
+d_wasserstein = wasserstein(result_normal['dgms'][1], result_anomaly['dgms'][1])
+```
+
+**Wasserstein distance** = optimal transport cost between two persistence diagrams.
+
+In `tda_detect/drift.py`:
+
+- Compute W between a reference window and each new sliding window
+- If W > threshold → drift detected → trigger model retraining
+- This is the **Topological Wasserstein Drift Detector** — the novel MLOps contribution
+
+**Expected output:**
+
+```
+Wasserstein distance between normal and anomalous H1 diagrams:
+  W = [non-trivial positive value confirming diagrams differ]
+```
+
+---
+
+### Cell 21 — Stability theorem demo (mathematical capstone)
+
+**The stability theorem (Cohen-Steiner et al., 2007):**
+
+```
+W∞(D(f), D(g)) ≤ ‖f − g‖∞
+```
+
+Small perturbations to the input produce small changes in the persistence diagram.
+This guarantees the anomaly detector does not fire on random noise.
+
+**Demo:** We perturb the normal signal with increasing noise levels σ = 0.00, 0.02,
+0.05, 0.10, 0.20, 0.40 and measure the Wasserstein distance from the clean reference
+diagram.
+
+**Expected output:**
+
+```
+noise σ = 0.00  |  L∞ ≈ 0.000  |  W(dgm) = 0.0000
+noise σ = 0.02  |  L∞ ≈ 0.060  |  W(dgm) = small
+noise σ = 0.05  |  L∞ ≈ 0.150  |  W(dgm) = moderate
+noise σ = 0.40  |  L∞ ≈ 1.200  |  W(dgm) = large
+```
+
+The plot shows W(D₁, D₂) staying below the stability bound line, confirming the
+theorem numerically.
+
+**Final print:**
+
+```
+=== Appendix A Complete ===
+Full chain demonstrated:
+  Simplicial complex → Boundary matrices → Betti numbers
+  → VR filtration → Persistence pairs → Takens embedding
+  → Anomaly detection → Wasserstein drift detection → Stability theorem
+```
 
 ---
 
@@ -506,16 +516,16 @@ Run Cell 1 first (imports), then all subsequent cells in order.
 
 ## Connection to the Production Pipeline
 
-Every concept demonstrated here maps directly to production code:
-
-| Notebook concept                      | Production code                                  | Phase   |
-| ------------------------------------- | ------------------------------------------------ | ------- |
-| `BoundaryMatrix` class                | `tda_detect/utils.py`                            | Phase 1 |
-| VR filtration at increasing ε         | `tda_detect/features.py` — `TDAFeatureExtractor` | Phase 2 |
-| Ripser on point cloud                 | `tda_detect/features.py` — `TDAFeatureExtractor` | Phase 2 |
-| Persistence diagram                   | Input to `persim.PersistenceImager`              | Phase 2 |
-| Anomaly = point far from diagonal     | Anomaly score in `tda_detect/models.py`          | Phase 3 |
-| Wasserstein distance between diagrams | `tda_detect/drift.py`                            | Phase 4 |
+| Notebook concept                  | Production code                                     | Phase   |
+| --------------------------------- | --------------------------------------------------- | ------- |
+| `BoundaryMatrix` class            | `tda_detect/utils.py`                               | Phase 1 |
+| VR filtration at increasing ε     | `tda_detect/features.py` — `TDAFeatureExtractor`    | Phase 2 |
+| Ripser on point cloud             | `tda_detect/features.py` — `TDAFeatureExtractor`    | Phase 2 |
+| Persistence diagram               | Input to `persim.PersistenceImager`                 | Phase 2 |
+| Anomaly = point far from diagonal | Anomaly score in `tda_detect/models.py`             | Phase 3 |
+| Takens embedding                  | `tda_detect/features.py` — `takens_embed()`         | Phase 2 |
+| Wasserstein distance              | `tda_detect/drift.py` — Drift Detector              | Phase 4 |
+| Stability theorem                 | Mathematical guarantee for Phase 4 threshold tuning | Phase 4 |
 
 ---
 
@@ -526,4 +536,16 @@ The `BoundaryMatrix` class from Cell 5 is tested in `tests/test_features.py`:
 ```bash
 python -m pytest tests/test_features.py -v
 # 3 passed: filled triangle, empty triangle, two components
+```
+
+---
+
+## Commit History
+
+```
+feat: Day 1 - folder structure, environment, cells 1-4
+feat: Day 2 - BoundaryMatrix class, cells 5-8, 3 tests passing
+feat: Day 3 - VR filtration, union-find, hand-computed persistence diagram
+feat: Day 4 - Takens embedding, normal vs anomalous, Wasserstein distance
+docs: Day 5 - markdown polish, stability theorem cell, updated PHASE1_NOTEBOOK.md
 ```
