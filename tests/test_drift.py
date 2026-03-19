@@ -6,7 +6,8 @@ Unit tests for TopologicalDriftDetector.
 import pytest
 import numpy as np
 import sys
-sys.path.insert(0, r"C:\Users\ghild\OneDrive\Desktop\TDA-Mlops")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tda_detect.drift import TopologicalDriftDetector
 
@@ -154,27 +155,27 @@ class TestCalibration:
         assert result is fitted_detector
 
     def test_calibration_sets_threshold(self, fitted_detector,
-                                         normal_signals, drifted_signals):
+                                        normal_signals, drifted_signals):
         old_thr = fitted_detector.threshold
         fitted_detector.calibrate_threshold(normal_signals, drifted_signals)
         assert fitted_detector.threshold != old_thr
 
     def test_calibration_threshold_positive(self, fitted_detector,
-                                             normal_signals, drifted_signals):
+                                            normal_signals, drifted_signals):
         fitted_detector.calibrate_threshold(normal_signals, drifted_signals)
         assert fitted_detector.threshold > 0
 
     def test_calibration_direction(self, fitted_detector,
-                                normal_signals, drifted_signals):
+                                   normal_signals, drifted_signals):
         """Calibration should achieve F1 > 0.5 on held-out data."""
         from sklearn.metrics import f1_score
 
         fitted_detector.calibrate_threshold(normal_signals, drifted_signals)
-        
+
         all_signals = normal_signals + drifted_signals
         labels      = [0]*len(normal_signals) + [1]*len(drifted_signals)
         preds       = [int(fitted_detector.update(s)["drift_detected"])
-                    for s in all_signals]
+                       for s in all_signals]
         f1 = f1_score(labels, preds, zero_division=0)
         assert f1 > 0.5, f"Calibration F1={f1:.3f} too low"
 
@@ -202,7 +203,7 @@ class TestPersistence:
         assert len(loaded.reference_mean_) == len(fitted_detector.reference_mean_)
 
     def test_loaded_detector_predicts(self, fitted_detector,
-                                       normal_signals, tmp_path):
+                                      normal_signals, tmp_path):
         path = str(tmp_path / "detector.pkl")
         fitted_detector.save(path)
         loaded = TopologicalDriftDetector.load(path)
